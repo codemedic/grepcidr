@@ -10,7 +10,8 @@ INSTALLDIR=/usr/local/bin
 # -DDEBUG=1 prints out hex versions of IPs and matches
 
 # Derive version from git tags, fallback to "unknown" if not in a git repo
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "unknown")
+# Use shell instead of := for better compatibility
+VERSION = $(shell git describe --tags --always --dirty 2>/dev/null || echo "unknown")
 
 CFLAGS=-O3 -Wall -pedantic -DVERSION=\"$(VERSION)\"
 #CFLAGS=-g -Wall -pedantic -DDEBUG=1 -DVERSION=\"$(VERSION)\"

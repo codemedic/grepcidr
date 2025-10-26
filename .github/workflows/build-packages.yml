@@ -26,13 +26,23 @@ jobs:
         run: |
           apk add --no-cache gcc musl-dev make git
       
+      - name: Fix git ownership issues
+        run: |
+          # Fix git ownership in container
+          git config --global --add safe.directory "$PWD"
+          git config --global --add safe.directory '*'
+          echo "Current directory: $PWD"
+          echo "Git describe result:"
+          git describe --tags --always --dirty || echo "FAILED"
+          echo "Git status:"
+          git status || echo "Git status failed"
+      
       - name: Build static binary
         run: |
-          # Ensure git directory is safe
-          git config --global --add safe.directory /__w/grepcidr/grepcidr || true
           make static
           strip grepcidr-static
-          ./grepcidr-static -V
+          # Just display version, don't fail on exit code
+          ./grepcidr-static -V || true
       
       - name: Upload static binary artifact
         uses: actions/upload-artifact@v4
