@@ -160,6 +160,11 @@ jobs:
       contents: write
     
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
       - name: Download all artifacts
         uses: actions/download-artifact@v4
       
@@ -168,9 +173,9 @@ jobs:
       
       - name: Rename static binary with architecture
         run: |
-          # Get the version from the binary
-          chmod +x grepcidr-static-amd64/grepcidr-static
-          VERSION=$(grepcidr-static-amd64/grepcidr-static -V 2>&1 | head -1 | awk '{print $2}' || echo "unknown")
+          # Get the version from the git tag
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "Version from tag: ${VERSION}"
           # Create renamed copy for release
           cp grepcidr-static-amd64/grepcidr-static grepcidr-${VERSION}-linux-amd64-static
           echo "Created: grepcidr-${VERSION}-linux-amd64-static"
