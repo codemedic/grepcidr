@@ -1,0 +1,161 @@
+name: Build Static Binary and Packages
+
+on:
+  push:
+    branches: [ master ]
+    tags:
+      - 'v*'
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build-static:
+    name: Build Static Binary (Alpine)
+    runs-on: ubuntu-latest
+    container:
+      image: alpine:latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install build dependencies
+        run: |
+          apk add --no-cache gcc musl-dev make
+      
+      - name: Build static binary
+        run: |
+          make static
+          strip grepcidr-static
+          ./grepcidr-static -V
+      
+      - name: Upload static binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: grepcidr-static-amd64
+          path: grepcidr-static
+          retention-days: 30
+
+  package:
+    name: Build Packages (DEB & RPM)
+    needs: build-static
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Download static binary
+        uses: actions/download-artifact@v4
+        with:
+          name: grepcidr-static-amd64
+      
+      - name: Make binary executable
+        run: chmod +x grepcidr-static
+      
+      - name: Install FPM
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ruby ruby-dev rubygems build-essential rpm
+          sudo gem install --no-document fpm
+      
+      - name: Prepare files for packaging
+        run: |
+          VERSION=$(./grepcidr-static -V | head -1 | awk '{print $2}')
+          echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          
+          # Create staging directory
+          mkdir -p package-root/usr/bin
+          mkdir -p package-root/usr/share/man/man1
+          mkdir -p package-root/usr/share/doc/grepcidr
+          
+          # Copy files
+          cp grepcidr-static package-root/usr/bin/grepcidr
+          cp grepcidr.1 package-root/usr/share/man/man1/
+          cp README.md package-root/usr/share/doc/grepcidr/
+          cp COPYING package-root/usr/share/doc/grepcidr/
+          cp ChangeLog package-root/usr/share/doc/grepcidr/
+          
+          # Compress man page
+          gzip -9 package-root/usr/share/man/man1/grepcidr.1
+      
+      - name: Build Debian package
+        run: |
+          fpm -s dir -t deb \
+            -n grepcidr \
+            -v ${VERSION} \
+            --iteration 1 \
+            --architecture amd64 \
+            --license GPL-2.0 \
+            --maintainer "GitHub Actions <noreply@github.com>" \
+            --url "https://github.com/codemedic/grepcidr" \
+            --description "Filter IP addresses matching IPv4 and IPv6 CIDR patterns" \
+            --deb-priority optional \
+            --category net \
+            -C package-root \
+            usr/bin/grepcidr \
+            usr/share/man/man1/grepcidr.1.gz \
+            usr/share/doc/grepcidr/README.md \
+            usr/share/doc/grepcidr/COPYING \
+            usr/share/doc/grepcidr/ChangeLog
+      
+      - name: Build RPM package
+        run: |
+          fpm -s dir -t rpm \
+            -n grepcidr \
+            -v ${VERSION} \
+            --iteration 1 \
+            --architecture x86_64 \
+            --license GPL-2.0 \
+            --maintainer "GitHub Actions <noreply@github.com>" \
+            --url "https://github.com/codemedic/grepcidr" \
+            --description "Filter IP addresses matching IPv4 and IPv6 CIDR patterns" \
+            --category "Applications/Internet" \
+            -C package-root \
+            usr/bin/grepcidr \
+            usr/share/man/man1/grepcidr.1.gz \
+            usr/share/doc/grepcidr/README.md \
+            usr/share/doc/grepcidr/COPYING \
+            usr/share/doc/grepcidr/ChangeLog
+      
+      - name: Upload Debian package
+        uses: actions/upload-artifact@v4
+        with:
+          name: debian-package
+          path: "*.deb"
+          retention-days: 30
+      
+      - name: Upload RPM package
+        uses: actions/upload-artifact@v4
+        with:
+          name: rpm-package
+          path: "*.rpm"
+          retention-days: 30
+
+  release:
+    name: Create Release (on tag)
+    needs: [build-static, package]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+      
+      - name: Display structure of downloaded files
+        run: ls -R
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            grepcidr-static-amd64/grepcidr-static
+            debian-package/*.deb
+            rpm-package/*.rpm
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -24,8 +24,11 @@ grepcidr:	grepcidr.c
 install:	grepcidr
 	cp grepcidr $(INSTALLDIR)
 
+static: grepcidr.c
+	$(CC) $(CFLAGS) -static -o grepcidr-static grepcidr.c
+
 clean:
-	rm -f grepcidr
+	rm -f grepcidr grepcidr-static
 
 tar:
 	cd ..; tar cvjf ${DIR}.tjz ${TFILES:C%^%${DIR}/%}
