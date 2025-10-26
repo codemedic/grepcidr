@@ -166,11 +166,21 @@ jobs:
       - name: Display structure of downloaded files
         run: ls -R
       
+      - name: Rename static binary with architecture
+        run: |
+          # Get the version from the binary
+          chmod +x grepcidr-static-amd64/grepcidr-static
+          VERSION=$(grepcidr-static-amd64/grepcidr-static -V 2>&1 | head -1 | awk '{print $2}' || echo "unknown")
+          # Create renamed copy for release
+          cp grepcidr-static-amd64/grepcidr-static grepcidr-${VERSION}-linux-amd64-static
+          echo "Created: grepcidr-${VERSION}-linux-amd64-static"
+          ls -lh grepcidr-*
+      
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            grepcidr-static-amd64/grepcidr-static
+            grepcidr-*-linux-amd64-static
             debian-package/*.deb
             rpm-package/*.rpm
           draft: false
