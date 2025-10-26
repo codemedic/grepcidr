@@ -716,7 +716,7 @@ int main(int argc, char* argv[])
 			{
 				if (*linep != '#') {
 					if(strchr(linep, ':')) {
-						struct netspec6 spec6;
+						struct netspec6 spec6 = {0};
 
 						if(net_parse6(linep, &spec6)) {
 							if(output_matched_pattern) spec6.original_line = strdup(linep);
@@ -725,7 +725,7 @@ int main(int argc, char* argv[])
 						else if(!igbadpat)
 							fprintf(stderr, "Not a pattern: %s", linep);
 					} else {
-						struct netspec spec;
+						struct netspec spec = {0};
 
 						if (net_parse(linep, &spec)) {
 							if(output_matched_pattern) spec.original_line = strdup(linep);
@@ -750,7 +750,7 @@ int main(int argc, char* argv[])
 		while (token)
 		{
 			if(strchr(token, ':')) {
-				struct netspec6 spec6;
+				struct netspec6 spec6 = {0};
 
 				if(net_parse6(token, &spec6)) {
 					if(output_matched_pattern) spec6.original_line = strdup(token);
@@ -759,7 +759,7 @@ int main(int argc, char* argv[])
 				else if(!igbadpat)
 					fprintf(stderr, "Not a pattern: %s\n", token);
 			} else {
-				struct netspec spec;
+				struct netspec spec = {0};
 
 				if (net_parse(token, &spec)) {
 					if(output_matched_pattern) spec.original_line = strdup(token);
@@ -807,21 +807,24 @@ int main(int argc, char* argv[])
 
 		/* combine overlapping ranges
 		 * outp is clean so far, inp is checked for overlap
+		 * Skip merging when -o is used to preserve all ranges for narrowest match
 		 */
-		outp = array;
-		for (inp = array+1; inp < array+npatterns; inp++)
-		{
-			if (inp->max <= outp->max)
-				continue;		/* contained within previous range, ignore */
+		if(!output_matched_pattern) {
+			outp = array;
+			for (inp = array+1; inp < array+npatterns; inp++)
+			{
+				if (inp->max <= outp->max)
+					continue;		/* contained within previous range, ignore */
 
-			if(inp->min <= outp->max) {	/* overlapping ranges, combine */
-				outp->max = inp->max;
-				continue;
+				if(inp->min <= outp->max) {	/* overlapping ranges, combine */
+					outp->max = inp->max;
+					continue;
+				}
+				if(++outp < inp)
+					*outp = *inp;		/* move down due to previously combined or ignored */
 			}
-			if(++outp < inp)
-				*outp = *inp;		/* move down due to previously combined or ignored */
+			npatterns = outp-array+1;		/* adjusted count after combinations */
 		}
-		npatterns = outp-array+1;		/* adjusted count after combinations */
 #if DEBUG
 		if((dnp = getenv("POSTMERGE4")) != 0) {
 			FILE *f = fopen(dnp, "w");
@@ -841,21 +844,24 @@ int main(int argc, char* argv[])
 
 		/* combine overlapping ranges
 		 * outp is clean so far, inp is checked for overlap
+		 * Skip merging when -o is used to preserve all ranges for narrowest match
 		 */
-		outp = array6;
-		for (inp = array6+1; inp < array6+n6patterns; inp++)
-		{
-			if (v6cmp(inp->max, outp->max) <= 0)
-				continue;		/* contained within previous range, ignore */
+		if(!output_matched_pattern) {
+			outp = array6;
+			for (inp = array6+1; inp < array6+n6patterns; inp++)
+			{
+				if (v6cmp(inp->max, outp->max) <= 0)
+					continue;		/* contained within previous range, ignore */
 
-			if(v6cmp(inp->min, outp->max)<=0) {	/* overlapping ranges, combine */
-				outp->max = inp->max;
-				continue;
+				if(v6cmp(inp->min, outp->max)<=0) {	/* overlapping ranges, combine */
+					outp->max = inp->max;
+					continue;
+				}
+				if(++outp < inp)
+					*outp = *inp;		/* move down due to previously combined or ignored */
 			}
-			if(++outp < inp)
-				*outp = *inp;		/* move down due to previously combined or ignored */
+			n6patterns = outp-array6+1;		/* adjusted count after combinations */
 		}
-		n6patterns = outp-array6+1;		/* adjusted count after combinations */
 	}
 
 # if DEBUG
@@ -1508,6 +1514,7 @@ scnlp:
 
 /*
  * binary range search for a value
+ * When output_matched_pattern is set, finds the narrowest matching range
  */
 static int
 netmatch(const struct netspec ip4, const char **original_line)
@@ -1515,6 +1522,9 @@ netmatch(const struct netspec ip4, const char **original_line)
 	int minx = 0;
 	int maxx = npatterns-1;
 	int tryx = 0;
+	int found_match = 0;
+	int best_match = -1;
+	unsigned int best_size = 0xffffffff;
 
 # if DEBUG
 	{	/* DEBUG */
@@ -1525,9 +1535,67 @@ netmatch(const struct netspec ip4, const char **original_line)
 		       ip4.max, ip4.max>>24, (ip4.max>>16)&255, (ip4.max>>8)&255, ip4.max&255);
 	}
 # endif
-	/* make sure it's in range */
-	if(ip4.max < array[0].min || ip4.min > array[maxx].max) return 0;
+	/* make sure it's in range - skip this optimization when doing narrowest match */
+	if(!output_matched_pattern && (ip4.max < array[0].min || ip4.min > array[maxx].max)) return 0;
 
+	/* When looking for narrowest match, do a linear search through potentially overlapping ranges */
+	if(output_matched_pattern) {
+		int i;
+		for(i = 0; i < npatterns; i++) {
+			if(ip4.min >= array[i].min && ip4.max <= array[i].max) {
+				/* This range contains the target */
+				unsigned int range_size = array[i].max - array[i].min;
+				/* Prefer smaller ranges, or later entries for equal-sized ranges (more specific labels) */
+				if(range_size < best_size || (range_size == best_size && i > best_match)) {
+					best_size = range_size;
+					best_match = i;
+					found_match = 1;
+				}
+			}
+		}
+		if(found_match) {
+			*original_line = array[best_match].original_line;
+			return 1;
+		}
+		
+		/* Check for didrsearch overlaps if enabled */
+		if(didrsearch) {
+			for(i = 0; i < npatterns; i++) {
+				if(ip4.min <= array[i].min && ip4.max >= array[i].max) {
+					/* Target contains pattern */
+					unsigned int range_size = array[i].max - array[i].min;
+					if(range_size < best_size || (range_size == best_size && i > best_match)) {
+						best_size = range_size;
+						best_match = i;
+						found_match = 1;
+					}
+				} else if(ip4.min >= array[i].min && ip4.min <= array[i].max) {
+					/* Base of target in pattern */
+					unsigned int range_size = array[i].max - array[i].min;
+					if(range_size < best_size || (range_size == best_size && i > best_match)) {
+						best_size = range_size;
+						best_match = i;
+						found_match = 1;
+					}
+				} else if(ip4.max >= array[i].min && ip4.max <= array[i].max) {
+					/* End of target in pattern */
+					unsigned int range_size = array[i].max - array[i].min;
+					if(range_size < best_size || (range_size == best_size && i > best_match)) {
+						best_size = range_size;
+						best_match = i;
+						found_match = 1;
+					}
+				}
+			}
+			if(found_match) {
+				*original_line = array[best_match].original_line;
+				return 1;
+			}
+		}
+		return 0;
+	}
+
+	/* Original binary search when not looking for narrowest match */
 	while(minx <= maxx) {
 		tryx = (minx+maxx)/2;
 # if DEBUG
@@ -1572,6 +1640,8 @@ netmatch6(const struct netspec6 ip6, const char **original_line)
 	int minx = 0;
 	int maxx = n6patterns-1;
 	int tryx = 0;
+	int found_match = 0;
+	int best_match = -1;
 
 # if DEBUG
 	{	/* DEBUG */
@@ -1585,9 +1655,65 @@ netmatch6(const struct netspec6 ip6, const char **original_line)
 		printf("\n");
 	}
 # endif
-	/* make sure it's in range */
-	if(v6cmp(ip6.max, array6[0].min) < 0 || v6cmp(ip6.min, array6[maxx].max) > 0) return 0;
+	/* make sure it's in range - skip this optimization when doing narrowest match */
+	if(!output_matched_pattern && (v6cmp(ip6.max, array6[0].min) < 0 || v6cmp(ip6.min, array6[maxx].max) > 0)) return 0;
 
+	/* When looking for narrowest match, do a linear search through potentially overlapping ranges */
+	if(output_matched_pattern) {
+		int i;
+		for(i = 0; i < n6patterns; i++) {
+			if(v6cmp(ip6.min, array6[i].min) >= 0 && v6cmp(ip6.max, array6[i].max) <= 0) {
+				/* This range contains the target - compare sizes to find narrowest, prefer later entries for equal ranges */
+				if(!found_match || v6cmp(array6[i].max, array6[best_match].max) < 0 ||
+				   (v6cmp(array6[i].max, array6[best_match].max) == 0 && 
+				    v6cmp(array6[i].min, array6[best_match].min) > 0) ||
+				   (v6cmp(array6[i].max, array6[best_match].max) == 0 && 
+				    v6cmp(array6[i].min, array6[best_match].min) == 0 && i > best_match)) {
+					best_match = i;
+					found_match = 1;
+				}
+			}
+		}
+		if(found_match) {
+			*original_line = array6[best_match].original_line;
+			return 1;
+		}
+		
+		/* Check for didrsearch overlaps if enabled */
+		if(didrsearch) {
+			for(i = 0; i < n6patterns; i++) {
+				int overlap = 0;
+				if(v6cmp(ip6.min, array6[i].min) <= 0 && v6cmp(ip6.max, array6[i].max) >= 0) {
+					/* Target contains pattern */
+					overlap = 1;
+				} else if(v6cmp(ip6.min, array6[i].min) >= 0 && v6cmp(ip6.min, array6[i].max) <= 0) {
+					/* Base of target in pattern */
+					overlap = 1;
+				} else if(v6cmp(ip6.max, array6[i].min) >= 0 && v6cmp(ip6.max, array6[i].max) <= 0) {
+					/* End of target in pattern */
+					overlap = 1;
+				}
+				
+				if(overlap) {
+					if(!found_match || v6cmp(array6[i].max, array6[best_match].max) < 0 ||
+					   (v6cmp(array6[i].max, array6[best_match].max) == 0 && 
+					    v6cmp(array6[i].min, array6[best_match].min) > 0) ||
+					   (v6cmp(array6[i].max, array6[best_match].max) == 0 && 
+					    v6cmp(array6[i].min, array6[best_match].min) == 0 && i > best_match)) {
+						best_match = i;
+						found_match = 1;
+					}
+				}
+			}
+			if(found_match) {
+				*original_line = array6[best_match].original_line;
+				return 1;
+			}
+		}
+		return 0;
+	}
+
+	/* Original binary search when not looking for narrowest match */
 	while(minx <= maxx) {
 		tryx = (minx+maxx)/2;
 
