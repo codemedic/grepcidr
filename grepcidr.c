@@ -40,7 +40,7 @@
 #define TXT_VERSION	"grepcidr 2.991\nParts copyright (C) 2004, 2005  Jem E. Berkes <jberkes@pc-tools.net>\n"
 #define TXT_USAGE	"Usage:\n" \
 			"\tgrepcidr [-V] [-cCDvhais] PATTERN [FILE...]\n" \
-			"\tgrepcidr [-V] [-cCDvhais] [-e PATTERN | -f FILE] [FILE...]\n"
+			"\tgrepcidr [-V] [-cCDvhais] [-o] [-e PATTERN | -f FILE] [FILE...]\n"
 #define MAXFIELD	512
 #define TOKEN_SEPS	"\t,\r\n"	/* so user can specify multiple patterns on command line */
 #define INIT_NETWORKS	8192
@@ -54,6 +54,7 @@ struct netspec
 {
 	unsigned int min;
 	unsigned int max;
+	char *original_line;
 };
 
 typedef struct v6addr { unsigned char a[16]; } v6addr;
@@ -65,6 +66,7 @@ struct netspec6
 {
 	v6addr min;
 	v6addr max;
+	char *original_line;
 };
 
 /* Global variables */
@@ -84,6 +86,7 @@ static int sloppy = 0;				/* don't complain about sloppy CIDR */
 static int cidrsearch = 0;			/* parse and match CIDR in haystack */
 static int didrsearch = 0;			/* match CIDR if overlaps with haystack */
 static int quick = 0;				/* quick match, ignore v4 with dots before or after */
+static int output_matched_pattern = 0;	/* output the matched pattern line */
 
 static void scan_block(char *bp, size_t blen, const char *fn);
 static void scan_read(FILE *f, const char *fn);
@@ -620,7 +623,7 @@ int netsort6(const void* a, const void* b)
 
 int main(int argc, char* argv[])
 {
-	static char shortopts[] = "acCDe:f:iqsvV";
+	static char shortopts[] = "acCDe:f:iqsvVo";
 	char* pat_filename = NULL;		/* filename containing patterns */
 	char* pat_strings = NULL;		/* pattern strings on command line */
 	int foundopt;
@@ -667,6 +670,10 @@ int main(int argc, char* argv[])
 				sloppy = 1;
 				break;
 
+			case 'o':
+				output_matched_pattern = 1;
+				break;
+
 			case 'D':
 				didrsearch = 1;
 				/* fall through */
@@ -711,15 +718,19 @@ int main(int argc, char* argv[])
 					if(strchr(linep, ':')) {
 						struct netspec6 spec6;
 
-						if(net_parse6(linep, &spec6))
+						if(net_parse6(linep, &spec6)) {
+							if(output_matched_pattern) spec6.original_line = strdup(linep);
 							array_insert6(&spec6);
+						}
 						else if(!igbadpat)
 							fprintf(stderr, "Not a pattern: %s", linep);
 					} else {
 						struct netspec spec;
 
-						if (net_parse(linep, &spec))
+						if (net_parse(linep, &spec)) {
+							if(output_matched_pattern) spec.original_line = strdup(linep);
 							array_insert(&spec);
+						}
 						else if(!igbadpat)
 							fprintf(stderr, "Not a pattern: %s", linep);
 					}
@@ -741,15 +752,19 @@ int main(int argc, char* argv[])
 			if(strchr(token, ':')) {
 				struct netspec6 spec6;
 
-				if(net_parse6(token, &spec6))
+				if(net_parse6(token, &spec6)) {
+					if(output_matched_pattern) spec6.original_line = strdup(token);
 					array_insert6(&spec6);
+				}
 				else if(!igbadpat)
 					fprintf(stderr, "Not a pattern: %s\n", token);
 			} else {
 				struct netspec spec;
 
-				if (net_parse(token, &spec))
+				if (net_parse(token, &spec)) {
+					if(output_matched_pattern) spec.original_line = strdup(token);
 					array_insert(&spec);
+				}
 				else if(!igbadpat)
 					fprintf(stderr, "Not a pattern: %s\n", token);
 			}
@@ -897,6 +912,11 @@ int main(int argc, char* argv[])
 	}
 
 	/* Cleanup */
+	if(output_matched_pattern) {
+		unsigned int i;
+		for(i=0; i<npatterns; i++) free(array[i].original_line);
+		for(i=0; i<n6patterns; i++) free(array6[i].original_line);
+	}
 	if (counting)
 		printf("%u\n", nmatch);
 	if (nmatch)
@@ -914,8 +934,8 @@ static void scan_read(FILE *f, const char *fn)
 	      scan_block(linep, len, fn);
 }
 
-static int netmatch(const struct netspec ip4);
-static int netmatch6(const struct netspec6 ip6);
+static int netmatch(const struct netspec ip4, const char **original_line);
+static int netmatch6(const struct netspec6 ip6, const char **original_line);
 
 /* scan some text, must be whole lines
  * generally either one line or the whole file
@@ -954,7 +974,8 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 		S_EIP4,		/* fourth octet */
 		S_V6SZ,		/* v6 cidr prefix */
 		S_SCNL,		/* scan for new line */
-		S_SCNLP		/* scan for new line and print line */
+		S_SCNLP,	/* scan for new line and print line */
+		S_SCNLPO	/* scan for new line and print original line */
 	} state;
 	enum sscan snext = anchor?S_SCNL:S_SC;	/* state after not an IP */
 
@@ -964,6 +985,7 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 	unsigned int ip4 = 0;	/* IPv4 value */
 	int octet = 0;		/* current octet */
 	int size = -1;		/* CIDR size */
+	const char *original_line = NULL;
 	v6addr ahi;		/* high part of address */
 	v6addr alo;		/* low part of address */
 	struct netspec range4;  /* IPv4 address or range */
@@ -1074,9 +1096,9 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 					}
 					seenone = 1;
 					range6.min = range6.max = ahi;
-					if(!netmatch6(range6))
+					if(!netmatch6(range6, &original_line))
 						break; /* didn't match */
-					state = S_SCNLP;
+					state = output_matched_pattern ? S_SCNLPO : S_SCNLP;
 					goto scnlp;	/* in case it was a \n */
 				}
 				break;	/* partial address, not an IP */
@@ -1125,7 +1147,7 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 
 				seenone = 1;
 				range6.min = range6.max = ahi;
-				if(!netmatch6(range6))
+				if(!netmatch6(range6, &original_line))
 					break; /* didn't match */
 				state = S_SCNLP;
 				goto scnlp;	/* in case it was a \n */
@@ -1143,9 +1165,9 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 				if (size < 0) size = 0; /* ignore bad prefix */
 				/* TODO: check badbits? naah */
 				applymask6(ahi, size, &range6);
-				if(!netmatch6(range6))
+				if(!netmatch6(range6, &original_line))
 					break; /* didn't match */
-				state = S_SCNLP;
+				state = output_matched_pattern ? S_SCNLPO : S_SCNLP;
 				goto scnlp;	/* in case it was a \n */
 
 			case S_LCH:		/* low chunk */
@@ -1195,7 +1217,7 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 				}
 				seenone = 1;
 				range6.min = range6.max = ahi;
-				if(!netmatch6(range6))
+				if(!netmatch6(range6, &original_line))
 					break; /* didn't match */
 				state = S_SCNLP;
 				goto scnlp;	/* in case it was a \n */
@@ -1283,12 +1305,30 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 				}
 				seenone = 1;
 				range4.min = range4.max = ip4;
-				if(!netmatch(range4))
-					break; /* didn't match */
-				state = S_SCNLP;
-				goto scnlp;	/* in case it was a \n */
+				if(netmatch(range4, &original_line) ^ invert) {
+					state = output_matched_pattern ? S_SCNLPO : S_SCNLP;
+					/* if already at newline, print immediately */
+					if(ch == '\n') {
+						if(!counting) {
+							if(output_matched_pattern) {
+								fputs(original_line, stdout);
+								if(original_line[strlen(original_line)-1] != '\n')
+									putchar('\n');
+							} else {
+								if(!nonames && fn) printf("%s:", fn);
+								fwrite(lp, p-lp, 1, stdout);
+							}
+						}
+						nmatch++;
+						state = S_BEG;
+						continue;
+					}
+					/* not at newline yet, go scan for it */
+					goto scnlp;
+				}
+				break;
 
-                        case S_V4SZ:    /* cidr size */
+			case S_V4SZ:	/* cidr size */
 				if(isdigit(ch)) {
 					if (size >= 0)
 						size = size*10 + ch-'0';
@@ -1303,11 +1343,29 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 					range4.min &= ~mask; /* force to CIDR boundary */
 					range4.max |= mask;
 				}
-				if(!netmatch(range4))
-					break; /* didn't match */
-				state = S_SCNLP;
-				goto scnlp;	/* in case it was a \n */
-				
+				if(netmatch(range4, &original_line) ^ invert) {
+					state = output_matched_pattern ? S_SCNLPO : S_SCNLP;
+					/* if already at newline, print immediately */
+					if(ch == '\n') {
+						if(!counting) {
+							if(output_matched_pattern) {
+								fputs(original_line, stdout);
+								if(original_line[strlen(original_line)-1] != '\n')
+									putchar('\n');
+							} else {
+								if(!nonames && fn) printf("%s:", fn);
+								fwrite(lp, p-lp, 1, stdout);
+							}
+						}
+						nmatch++;
+						state = S_BEG;
+						continue;
+					}
+					/* not at newline yet, go scan for it */
+					goto scnlp;
+				}
+				break;
+
 			case S_EIP2:	/* in embedded octet */
 			case S_EIP3:
 				if(isdigit(ch)) {
@@ -1343,49 +1401,91 @@ static void scan_block(char *bp, size_t blen, const char *fn)
 				seenone = 1;
 				if(n6patterns) {
 					range6.min = range6.max = ahi;
-					if(netmatch6(range6)) {	/* try a v6 pattern */
-						state = S_SCNLP;
-						goto scnlp;	/* in case it was a \n */
+					if(netmatch6(range6, &original_line) ^ invert) { /* try a v6 pattern */
+						state = output_matched_pattern ? S_SCNLPO : S_SCNLP;
+						/* if already at newline, print immediately */
+						if(ch == '\n') {
+							if(!counting) {
+								if(output_matched_pattern) {
+									fputs(original_line, stdout);
+									if(original_line[strlen(original_line)-1] != '\n')
+										putchar('\n');
+								} else {
+									if(!nonames && fn) printf("%s:", fn);
+									fwrite(lp, p-lp, 1, stdout);
+								}
+							}
+							nmatch++;
+							state = S_BEG;
+							continue;
+						}
+						/* not at newline yet, go scan for it */
+						goto scnlp;
 					}
 				}
-				/* get the v4 address as an int and try
-				 * that */
-				ip4 = (ahi.a[12]<<24)|(ahi.a[13]<<16)|(ahi.a[14]<<8)|ahi.a[15];
-				if(cidrsearch && ch == '/') {
-					state = S_V4SZ;
-					size = 0;
-					continue;
+				if(npatterns) {
+					/* it could be a v4-mapped v6 address */
+					ip4 = (ahi.a[12]<<24) + (ahi.a[13]<<16) + (ahi.a[14]<<8) + ahi.a[15];
+					range4.min = range4.max = ip4;
+					if(netmatch(range4, &original_line) ^ invert) {
+						state = output_matched_pattern ? S_SCNLPO : S_SCNLP;
+						/* if already at newline, print immediately */
+						if(ch == '\n') {
+							if(!counting) {
+								if(output_matched_pattern) {
+									fputs(original_line, stdout);
+									if(original_line[strlen(original_line)-1] != '\n')
+										putchar('\n');
+								} else {
+									if(!nonames && fn) printf("%s:", fn);
+									fwrite(lp, p-lp, 1, stdout);
+								}
+							}
+							nmatch++;
+							state = S_BEG;
+							continue;
+						}
+						/* not at newline yet, go scan for it */
+						goto scnlp;
+					}
 				}
-				range4.min = range4.max = ip4;
-				if(!npatterns || !netmatch(range4))
-					break; /* didn't match */
+				break;
 
-				state = S_SCNLP;
-				/* fall through, in case it was a \n */
-
-scnlp:
-			case S_SCNLP:	/* print this line */
+			case S_SCNL:	/* scan for newline */
 				/* HACK scan the rest of the line fast */
 				while(ch != '\n' && p < plim)
 					ch = *p++;
-
+				break;
+scnlp:
+			case S_SCNLP:	/* scan for newline and print */
 				if(ch == '\n') {
-					if(!invert) {
-						nmatch++;
-						if(!counting) {
-							if(fn && !nonames)
-								printf("%s:", fn);
-							fwrite(lp, 1, p-lp, stdout);
-						}
+					if(!counting) {
+						if(!nonames && fn) printf("%s:", fn);
+						fwrite(lp, p-lp, 1, stdout);
 					}
+					if(invert && !seenone) nmatch++;
+					else if(!invert) nmatch++;
 					state = S_BEG;
+					continue;
 				}
 				continue;
 
-			case S_SCNL:
-				/* HACK scan the rest of the line fast */
-				while(ch != '\n' && p < plim)
-					ch = *p++;
+			case S_SCNLPO:
+				if(ch == '\n') {
+					if(!counting) {
+						fputs(original_line, stdout);
+						if(original_line[strlen(original_line)-1] != '\n')
+							putchar('\n');
+					}
+					if(invert && !seenone) nmatch++;
+					else if(!invert) nmatch++;
+					state = S_BEG;
+					continue;
+				}
+				continue;
+
+			default:
+				/* can't happen */
 				break;
 		}
 		/* default action if it wasn't an IP */
@@ -1410,7 +1510,7 @@ scnlp:
  * binary range search for a value
  */
 static int
-netmatch(const struct netspec ip4)
+netmatch(const struct netspec ip4, const char **original_line)
 {
 	int minx = 0;
 	int maxx = npatterns-1;
@@ -1445,17 +1545,29 @@ netmatch(const struct netspec ip4)
 		break;	/* gee, we may have found it */
 	}
 
-	if(ip4.min >= array[tryx].min && ip4.max <= array[tryx].max) return 1; /* target in pattern */
+	if(ip4.min >= array[tryx].min && ip4.max <= array[tryx].max) {
+		if(output_matched_pattern) *original_line = array[tryx].original_line;
+		return 1; /* target in pattern */
+	}
 	if(didrsearch) {	/* look for overlap */
-		if(ip4.min <= array[tryx].min && ip4.max >= array[tryx].max) return 1; /* pattern in target */
-		if(ip4.min >= array[tryx].min && ip4.min <= array[tryx].max) return 1; /* base of target in pattern */
-		if(ip4.max >= array[tryx].min && ip4.max <= array[tryx].max) return 1; /* end of target in pattern */
+		if(ip4.min <= array[tryx].min && ip4.max >= array[tryx].max) {
+			if(output_matched_pattern) *original_line = array[tryx].original_line;
+			return 1; /* pattern in target */
+		}
+		if(ip4.min >= array[tryx].min && ip4.min <= array[tryx].max) {
+			if(output_matched_pattern) *original_line = array[tryx].original_line;
+			return 1; /* base of target in pattern */
+		}
+		if(ip4.max >= array[tryx].min && ip4.max <= array[tryx].max) {
+			if(output_matched_pattern) *original_line = array[tryx].original_line;
+			return 1; /* end of target in pattern */
+		}
 	}
 	return 0;	/* not in the current entry */
 }
 
 static int
-netmatch6(const struct netspec6 ip6)
+netmatch6(const struct netspec6 ip6, const char **original_line)
 {
 	int minx = 0;
 	int maxx = n6patterns-1;
@@ -1490,7 +1602,7 @@ netmatch6(const struct netspec6 ip6)
 		break; /* gee, we may have found it */
 	}
 
-# if DEBUG
+#if DEBUG
 	{	/* DEBUG */
 		int i;
 
@@ -1501,13 +1613,25 @@ netmatch6(const struct netspec6 ip6)
 		for(i = 0; i<16; i++) printf(" %02x", array6[minx].max.a[i]);
 		printf("\n");
 	}
-# endif
+#endif
 
-	if(v6cmp(ip6.min, array6[tryx].min) >= 0 && v6cmp(ip6.max, array6[tryx].max) <= 0) return 1; /* target in pattern */
+	if(v6cmp(ip6.min, array6[tryx].min) >= 0 && v6cmp(ip6.max, array6[tryx].max) <= 0) {
+		if(output_matched_pattern) *original_line = array6[tryx].original_line;
+		return 1; /* target in pattern */
+	}
 	if(didrsearch) {
-		if(v6cmp(ip6.min, array6[tryx].min) <= 0 && v6cmp(ip6.max, array6[tryx].max) >= 0) return 1; /* pattern in target */
-		if(v6cmp(ip6.min, array6[tryx].min) >= 0 && v6cmp(ip6.min, array6[tryx].max) <= 0) return 1; /* base in pattern */
-		if(v6cmp(ip6.max, array6[tryx].min) >= 0 && v6cmp(ip6.max, array6[tryx].max) <= 0) return 1; /* end in target */
+		if(v6cmp(ip6.min, array6[tryx].min) <= 0 && v6cmp(ip6.max, array6[tryx].max) >= 0) {
+			if(output_matched_pattern) *original_line = array6[tryx].original_line;
+			return 1; /* pattern in target */
+		}
+		if(v6cmp(ip6.min, array6[tryx].min) >= 0 && v6cmp(ip6.min, array6[tryx].max) <= 0) {
+			if(output_matched_pattern) *original_line = array6[tryx].original_line;
+			return 1; /* base in pattern */
+		}
+		if(v6cmp(ip6.max, array6[tryx].min) >= 0 && v6cmp(ip6.max, array6[tryx].max) <= 0) {
+			if(output_matched_pattern) *original_line = array6[tryx].original_line;
+			return 1; /* end in target */
+		}
 	}
 	return 0;	/* not in the current entry */
 }

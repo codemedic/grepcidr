@@ -28,7 +28,7 @@ COMMAND USAGE
 -------------
 Usage:
         grepcidr [-V] [-cCDvhais] PATTERN [FILE ...]
-        grepcidr [-V]  [-V] [-cCDvhais] [-e PATTERN | -f FILE] [FILE ...]
+        grepcidr [-V] [-cCDvhaiso] [-e PATTERN | -f FILE] [FILE ...]
 
 -V	Show software version
 -a	Anchor matches to beginning of line, otherwise match anywhere
@@ -40,6 +40,7 @@ Usage:
 -f	Obtain CIDR and range pattern(s) from file
 -i	Ignore patterns that are not valid CIDRs or ranges
 -h	Do not print filenames when matching multiple files
+-o	Print the matching pattern line instead of the input line
 
 PATTERN specified on the command line may contain multiple patterns
 separated by whitespace or commas. For long lists of network patterns,
