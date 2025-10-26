@@ -1,3 +1,11 @@
+Version 3.0
+===========
+
+- Add -o option to print matching pattern instead of input line
+- Enhanced -o to print narrowest match when patterns overlap
+- Add static build target in Makefile
+- Add GitHub Actions workflow for automated builds and packaging
+
 Version 2.991
 ============
 

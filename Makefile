@@ -9,8 +9,11 @@ INSTALLDIR=/usr/local/bin
 # with GCC, -O3 makes a lot of difference
 # -DDEBUG=1 prints out hex versions of IPs and matches
 
-CFLAGS=-O3 -Wall -pedantic
-#CFLAGS=-g -Wall -pedantic -DDEBUG=1
+# Derive version from git tags, fallback to "unknown" if not in a git repo
+VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "unknown")
+
+CFLAGS=-O3 -Wall -pedantic -DVERSION=\"$(VERSION)\"
+#CFLAGS=-g -Wall -pedantic -DDEBUG=1 -DVERSION=\"$(VERSION)\"
 TFILES=COPYING ChangeLog Makefile README grepcidr.1 grepcidr.c
 DIR!=basename ${PWD}
 

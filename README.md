@@ -1,6 +1,6 @@
 # grepcidr
 
-**Version 2.991** - Filter IP addresses matching IPv4 and IPv6 CIDR specification
+**Version 3.0** - Filter IP addresses matching IPv4 and IPv6 CIDR specification
 
 Parts Copyright (C) 2004-2005  Jem E. Berkes <jberkes@pc-tools.net>  
 <http://www.pc-tools.net/unix/grepcidr/>

@@ -19,13 +19,17 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for tags
       
       - name: Install build dependencies
         run: |
-          apk add --no-cache gcc musl-dev make
+          apk add --no-cache gcc musl-dev make git
       
       - name: Build static binary
         run: |
+          # Ensure git directory is safe
+          git config --global --add safe.directory /__w/grepcidr/grepcidr || true
           make static
           strip grepcidr-static
           ./grepcidr-static -V
@@ -45,6 +49,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Fetch all history for tags
       
       - name: Download static binary
         uses: actions/download-artifact@v4
@@ -62,8 +68,10 @@ jobs:
       
       - name: Prepare files for packaging
         run: |
-          VERSION=$(./grepcidr-static -V | head -1 | awk '{print $2}')
+          # Get version from git or binary
+          VERSION=$(git describe --tags --always --dirty 2>/dev/null || ./grepcidr-static -V | head -1 | awk '{print $2}')
           echo "VERSION=${VERSION}" >> $GITHUB_ENV
+          echo "Building packages for version: ${VERSION}"
           
           # Create staging directory
           mkdir -p package-root/usr/bin
