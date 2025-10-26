@@ -1,0 +1,8 @@
+/test_*txt
+/grepcidr
+/grepcidr-static
+/.idea/
+/.vscode/
+# test data from https://ip-ranges.amazonaws.com/ip-ranges.json
+/aws_ranges.txt
+/**/.DS_Store
